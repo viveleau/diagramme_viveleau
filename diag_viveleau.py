@@ -1,13 +1,24 @@
 import streamlit as st
-import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.ticker import LogLocator
-import io
-import base64
-from fpdf import FPDF
 import tempfile
 import os
 from io import BytesIO
+
+# Vérifier et installer les imports manquants
+try:
+    import matplotlib.pyplot as plt
+    from matplotlib.ticker import LogLocator, ScalarFormatter
+    MATPLOTLIB_AVAILABLE = True
+except ImportError:
+    MATPLOTLIB_AVAILABLE = False
+    st.error("⚠️ matplotlib n'est pas installé. Le diagramme ne pourra pas être affiché.")
+
+try:
+    from fpdf import FPDF
+    FPDF_AVAILABLE = True
+except ImportError:
+    FPDF_AVAILABLE = False
+    st.error("⚠️ fpdf n'est pas installé. L'export PDF ne fonctionnera pas.")
 
 # Dictionnaire des coefficients de Hazen-Williams par type de canalisation
 HAZEN_WILLIAMS_COEFFICIENTS = {
@@ -167,6 +178,9 @@ def calculate_hazen_williams(Q=None, D=None, J=None, V=None, Q_unit="m³/h", pip
 
 def create_dynamic_viveleau_diagram(Q_point=None, J_point=None, D_point=None, V_point=None, pipe_type="Acier"):
     """Crée un diagramme de Viveleau dynamique avec le point calculé"""
+    if not MATPLOTLIB_AVAILABLE:
+        return None, None, None
+    
     fig, ax = plt.subplots(figsize=(14, 10))
     
     # Définir des échelles fixes et réalistes pour un diagramme de Viveleau
@@ -327,7 +341,6 @@ def create_dynamic_viveleau_diagram(Q_point=None, J_point=None, D_point=None, V_
     ax2.tick_params(axis='x', which='major', labelsize=9)
     
     # Format des ticks pour plus de clarté
-    from matplotlib.ticker import ScalarFormatter
     for axis in [ax.xaxis, ax.yaxis]:
         axis.set_major_formatter(ScalarFormatter())
     
@@ -336,6 +349,9 @@ def create_dynamic_viveleau_diagram(Q_point=None, J_point=None, D_point=None, V_
 
 def create_pdf_report(calculated_point, pipe_type, pipe_length, total_pressure_loss, C_value):
     """Crée un rapport PDF avec les résultats et le diagramme"""
+    if not FPDF_AVAILABLE:
+        return None
+    
     pdf = FPDF()
     pdf.add_page()
     
@@ -366,46 +382,51 @@ def create_pdf_report(calculated_point, pipe_type, pipe_length, total_pressure_l
     pdf.ln(10)
     
     # Générer et ajouter le diagramme
-    try:
-        # Créer le diagramme
-        fig, ax, ax2 = create_dynamic_viveleau_diagram(
-            Q_point=calculated_point['Q_ls'], 
-            J_point=calculated_point['J'],
-            D_point=calculated_point['D'],
-            V_point=calculated_point['V'],
-            pipe_type=pipe_type
-        )
-        
-        # Sauvegarder le diagramme dans un buffer
-        buf = BytesIO()
-        fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
-        buf.seek(0)
-        
-        # Fermer la figure pour libérer la mémoire
-        plt.close(fig)
-        
-        # Sauvegarder l'image temporairement pour FPDF
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_img:
-            tmp_img.write(buf.getvalue())
-            image_path = tmp_img.name
-        
-        # Ajouter le diagramme au PDF
-        pdf.set_font("Arial", 'B', 12)
-        pdf.cell(0, 10, "Diagramme de Viveleau:", 0, 1)
-        pdf.ln(5)
-        
-        # Ajouter l'image au PDF (redimensionnée pour s'adapter à la page)
-        pdf.image(image_path, x=10, y=pdf.get_y(), w=190)
-        
-        # Nettoyer le fichier temporaire
-        os.unlink(image_path)
-        
-    except Exception as e:
+    if MATPLOTLIB_AVAILABLE:
+        try:
+            # Créer le diagramme
+            fig, ax, ax2 = create_dynamic_viveleau_diagram(
+                Q_point=calculated_point['Q_ls'], 
+                J_point=calculated_point['J'],
+                D_point=calculated_point['D'],
+                V_point=calculated_point['V'],
+                pipe_type=pipe_type
+            )
+            
+            if fig is not None:
+                # Sauvegarder le diagramme dans un buffer
+                buf = BytesIO()
+                fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+                buf.seek(0)
+                
+                # Fermer la figure pour libérer la mémoire
+                plt.close(fig)
+                
+                # Sauvegarder l'image temporairement pour FPDF
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_img:
+                    tmp_img.write(buf.getvalue())
+                    image_path = tmp_img.name
+                
+                # Ajouter le diagramme au PDF
+                pdf.set_font("Arial", 'B', 12)
+                pdf.cell(0, 10, "Diagramme de Viveleau:", 0, 1)
+                pdf.ln(5)
+                
+                # Ajouter l'image au PDF (redimensionnée pour s'adapter à la page)
+                pdf.image(image_path, x=10, y=pdf.get_y(), w=190)
+                
+                # Nettoyer le fichier temporaire
+                os.unlink(image_path)
+            
+        except Exception as e:
+            pdf.set_font("Arial", 'I', 10)
+            pdf.cell(0, 8, f"Erreur lors de la génération du diagramme: {str(e)}", 0, 1)
+    else:
         pdf.set_font("Arial", 'I', 10)
-        pdf.cell(0, 8, f"Erreur lors de la génération du diagramme: {str(e)}", 0, 1)
+        pdf.cell(0, 8, "Diagramme non disponible (matplotlib non installé)", 0, 1)
     
     # Ajouter le filigrane
-    pdf.set_font("Arial", 'I',20)
+    pdf.set_font("Arial", 'I', 20)
     pdf.set_text_color(200, 200, 200)  # Gris clair
     pdf.rotate(45)  # Rotation à 45 degrés
     pdf.text(60, 150, "By Viveleau 2025 - https://viveleau-services.com/")
@@ -426,6 +447,21 @@ def main():
     Cet outil permet de déterminer les paramètres hydrauliques d'une conduite selon le diagramme de Viveleau.
     **Remplissez exactement 2 paramètres** pour calculer les 2 autres.
     """)
+    
+    # Avertissements si les bibliothèques ne sont pas disponibles
+    if not MATPLOTLIB_AVAILABLE:
+        st.warning("""
+        ⚠️ **matplotlib n'est pas installé** 
+        - Le diagramme ne pourra pas être affiché
+        - Installez-le avec: `pip install matplotlib`
+        """)
+    
+    if not FPDF_AVAILABLE:
+        st.warning("""
+        ⚠️ **fpdf n'est pas installé** 
+        - L'export PDF ne fonctionnera pas
+        - Installez-le avec: `pip install fpdf`
+        """)
     
     # Initialisation de l'état de session pour l'unité par défaut
     if 'flow_unit' not in st.session_state:
@@ -590,32 +626,34 @@ def main():
                     st.session_state.C_value = C_used
                     
                     # Bouton pour exporter en PDF
-                    st.subheader("📄 Export PDF")
-                    pdf = create_pdf_report(
-                        st.session_state.calculated_point, 
-                        pipe_type, 
-                        pipe_length, 
-                        total_pressure_loss, 
-                        C_used
-                    )
-                    
-                    # Sauvegarder le PDF dans un fichier temporaire
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
-                        pdf.output(tmp_file.name)
-                        with open(tmp_file.name, "rb") as f:
-                            pdf_data = f.read()
-                    
-                    # Bouton de téléchargement
-                    st.download_button(
-                        label="📥 Enregistrer PDF",
-                        data=pdf_data,
-                        file_name=f"calcul_hydraulique_viveleau_{pipe_length}m.pdf",
-                        mime="application/pdf",
-                        help="Télécharger le rapport complet au format PDF"
-                    )
-                    
-                    # Nettoyer le fichier temporaire
-                    os.unlink(tmp_file.name)
+                    if FPDF_AVAILABLE:
+                        st.subheader("📄 Export PDF")
+                        pdf = create_pdf_report(
+                            st.session_state.calculated_point, 
+                            pipe_type, 
+                            pipe_length, 
+                            total_pressure_loss, 
+                            C_used
+                        )
+                        
+                        if pdf is not None:
+                            # Sauvegarder le PDF dans un fichier temporaire
+                            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+                                pdf.output(tmp_file.name)
+                                with open(tmp_file.name, "rb") as f:
+                                    pdf_data = f.read()
+                            
+                            # Bouton de téléchargement
+                            st.download_button(
+                                label="📥 Enregistrer PDF",
+                                data=pdf_data,
+                                file_name=f"calcul_hydraulique_viveleau_{pipe_length}m.pdf",
+                                mime="application/pdf",
+                                help="Télécharger le rapport complet au format PDF"
+                            )
+                            
+                            # Nettoyer le fichier temporaire
+                            os.unlink(tmp_file.name)
                     
                 else:
                     st.error("❌ Impossible de calculer les paramètres avec les valeurs fournies")
@@ -639,22 +677,37 @@ def main():
     with col2:
         st.header("Diagramme de Viveleau")
         
-        # Création du diagramme dynamique
-        if 'calculated_point' in st.session_state:
-            point = st.session_state.calculated_point
-            fig, ax, ax2 = create_dynamic_viveleau_diagram(
-                Q_point=point['Q_ls'], 
-                J_point=point['J'],
-                D_point=point['D'],
-                V_point=point['V'],
-                pipe_type=point.get('pipe_type', 'Acier')
-            )
+        if MATPLOTLIB_AVAILABLE:
+            # Création du diagramme dynamique
+            if 'calculated_point' in st.session_state:
+                point = st.session_state.calculated_point
+                fig, ax, ax2 = create_dynamic_viveleau_diagram(
+                    Q_point=point['Q_ls'], 
+                    J_point=point['J'],
+                    D_point=point['D'],
+                    V_point=point['V'],
+                    pipe_type=point.get('pipe_type', 'Acier')
+                )
+            else:
+                # Diagramme par défaut sans point
+                fig, ax, ax2 = create_dynamic_viveleau_diagram(pipe_type=pipe_type)
+            
+            # Affichage du graphique
+            if fig is not None:
+                st.pyplot(fig)
+            else:
+                st.error("Impossible de générer le diagramme")
         else:
-            # Diagramme par défaut sans point
-            fig, ax, ax2 = create_dynamic_viveleau_diagram(pipe_type=pipe_type)
-        
-        # Affichage du graphique
-        st.pyplot(fig)
+            st.error("""
+            **matplotlib n'est pas disponible**
+            
+            Pour afficher le diagramme, installez matplotlib :
+            ```bash
+            pip install matplotlib
+            ```
+            
+            En attendant, vous pouvez utiliser les calculs et l'export PDF (si fpdf est installé).
+            """)
         
         # Explications
         with st.expander("ℹ️ Comment utiliser le diagramme"):
